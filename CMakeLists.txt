@@ -11,7 +11,7 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
 endif()
 
-add_executable(main main.c)
+add_executable(main main.c buhlmann.c)
 
 # 실행 타겟
 add_custom_target(run
@@ -19,3 +19,5 @@ add_custom_target(run
     DEPENDS main
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/Debug
 )
+
+add_compile_options(/utf-8)
