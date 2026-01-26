@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+﻿cmake_minimum_required(VERSION 3.10)
 project(ScubaProject C)
 
 set(CMAKE_C_STANDARD 99)
@@ -11,12 +11,16 @@ else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
 endif()
 
-add_executable(main main.c buhlmann.c)
+add_executable(
+    ScubaProject
+    main.c
+    buhlmann.c
+)
 
 # 실행 타겟
 add_custom_target(run
-    COMMAND main
-    DEPENDS main
+    COMMAND ScubaProject
+    DEPENDS ScubaProject
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/Debug
 )
 
