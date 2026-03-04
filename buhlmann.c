@@ -77,42 +77,77 @@ void Update_N2_Loadings(float current_loadings[], float depth_meters, float frac
     }
 }
 
-// 수면압이 1.0 bar라고 가정
-float Calculate_NDL(float depth_meters, float current_loadings[], float GF_Hi, float PO2) {
-    float min_time = 999.0; // 무한대로 초기화
-    float P_surface = 1.0;
-    float P_gas = (1.0f + (depth_meters / 10.0f)) * (1.0f - PO2);
+void Update_N2_Loadings_Schreiner(float current_loadings[], float depth_meters, float prev_depth_meters, float fraction_o2, float interval_sec) {
+    
+    float time_min = interval_sec / 60.0f;
+    float fraction_n2 = 1.0f - fraction_o2;
+
+    // 1. 시작 및 종료 시점의 폐포 내 질소 분압 계산
+    float P_amb_start = 1.0f + (prev_depth_meters / 10.0f);
+    float P_amb_end   = 1.0f + (depth_meters / 10.0f);
+    
+    // 수증기압 보정 (압력이 너무 낮아질 경우를 대비해 하한선 설정)
+    float P_gas_n2_start = (P_amb_start > WATER_VAPOR_PRESSURE) ? (P_amb_start - WATER_VAPOR_PRESSURE) * fraction_n2 : 0.0f;
+    float P_gas_n2_end   = (P_amb_end > WATER_VAPOR_PRESSURE) ? (P_amb_end - WATER_VAPOR_PRESSURE) * fraction_n2 : 0.0f;
+
+    // 2. 분당 질소 압력 변화율 (R)
+    float R = (P_gas_n2_end - P_gas_n2_start) / time_min;
 
     for (int i = 0; i < NUM_COMPARTMENTS; i++) {
-        // 1. 수면에서의 허용 한계치(P_tol) 계산
-        // 수식 단순화: M_surf = a[i] + P_surface / b[i]
-        // GF 적용된 P_tol = P_surface + GF_Hi * (M_surf - P_surface)
-        // 이를 전개하여 사용하거나 위 수식 사용
+        float Pi = current_loadings[i]; 
+        float half_life = N2_Half_Lives[i];
+        float k = logf(2.0f) / half_life;
+        
+        float P_new;
 
+        // 3. 수치적 안정성을 위한 분기 처리
+        // 수심 변화가 거의 없거나(R=0), 시간이 0에 가까우면 할데인 공식 사용
+        if (fabsf(R) < 0.00001f) {
+            // 할데인(Haldane) 공식: P_new = Pi + (P_gas - Pi) * (1 - e^-kt)
+            P_new = Pi + (P_gas_n2_end - Pi) * (1.0f - expf(-k * time_min));
+        } else {
+            // 표준 슈라이너(Schreiner) 공식
+            float e_kt = expf(-k * time_min);
+            // 공식: P_t = P_start + R*(t - 1/k) - (P_start - Pi - R/k) * e^-kt
+            P_new = P_gas_n2_start + R * (time_min - 1.0f / k) - (P_gas_n2_start - Pi - (R / k)) * e_kt;
+        }
+
+        // 4. 안전 장치: 물리적으로 질소압이 0보다 작을 수 없음
+        if (P_new < 0.0f) P_new = 0.0f;
+
+        current_loadings[i] = P_new;
+    }
+}
+
+float Calculate_NDL(float depth_meters, float current_loadings[], float GF_Hi, float fraction_o2) {
+    float min_time = 999.0f;
+    float P_surface = 1.01325f; // 표준 대기압
+    float fraction_n2 = 1.0f - fraction_o2;
+    
+    // 핵심 수정: Update 함수와 동일하게 수증기압 보정 적용
+    float P_amb = 1.0f + (depth_meters / 10.0f);
+    float P_gas = (P_amb - WATER_VAPOR_PRESSURE) * fraction_n2;
+    if (P_gas < 0) P_gas = 0;
+
+    for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+        // M-value 계산 (Buhlmann 공식)
         float M_surf = A_Coefficients[i] + (P_surface / B_Coefficients[i]);
         float P_tol = P_surface + GF_Hi * (M_surf - P_surface);
 
-        // 2. 이미 초과했는지 확인
-        if (current_loadings[i] > P_tol) return 0; // 감압 필요
+        if (current_loadings[i] > P_tol) return 0.0f; 
+        if (P_gas <= P_tol) continue; 
 
-        // 3. 현재 흡입 압력이 허용치보다 낮으면 이 조직은 안전함
-        if (P_gas <= P_tol) continue;
-
-        // 4. 시간 계산 (역산)
+        // NDL 역계산 공식
         float numerator = P_gas - P_tol;
         float denominator = P_gas - current_loadings[i];
         
-        // 로그 내부가 음수가 되지 않도록 방어 코드 필요
-        if (denominator <= 0) continue; 
+        if (denominator <= 0.0001f) continue; 
 
-        float time = (-N2_Half_Lives[i] / 0.693147f) * logf(numerator / denominator);
+        float time = (-N2_Half_Lives[i] / logf(2.0f)) * logf(numerator / denominator);
 
-        // 5. 최소 시간 갱신
-        if (time < min_time) {
-            min_time = time;
-        }
+        if (time < min_time) min_time = time;
     }
-    return min_time;
+    return (min_time > 999.0f) ? 999.0f : min_time;
 }
 
 /**
@@ -181,7 +216,7 @@ DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_Hi
     // 3. 정지 시간 계산 (시뮬레이션)
     // 현재 발견한 stop_depth에서 얼마나 있어야, 다음 단계(stop_depth - 3m)로 갈 수 있나?
     
-    int minutes = 0;
+    int seconds = 0;
     float next_stop_depth = (float)(plan.stop_depth - 3);
     
     // GF 보간 (Interpolation): 
@@ -192,11 +227,11 @@ DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_Hi
     // 시간이 지나서 다음 수심으로 갈 수 있는지 체크할 때도, 
     // 다음 수심에 해당하는 GF(선형 보간된 값)를 넘지 않는지 봐야 함.
     
-    while (minutes < 99) { // 최대 99분 제한
+    while (seconds < 3600) { // 최대 99분 제한 (99 * 60)
         // A. 1분 후의 질소 상태 예측 (기체는 Air 21% 가정, 혹은 현재 기체)
         // Update_N2_Loadings 함수 재사용 (시간 60초)
-        Update_N2_Loadings(sim_loadings, (float)plan.stop_depth, PO2, 60.0);
-        minutes++;
+        Update_N2_Loadings(sim_loadings, (float)plan.stop_depth, PO2, 10.0);
+        seconds += 10;
 
         // B. 이제 3m 위로 올라가도 안전한가?
         // 올라갈 목표 수심에 대해 적절한 GF 계산 (선형 보간)
@@ -214,7 +249,7 @@ DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_Hi
         // 목표 수심(next_stop_depth)이 안전한지 체크
         if (Is_Depth_Safe(next_stop_depth, sim_loadings, gf_at_next_depth)) {
             // 안전하다! 이제 올라가도 됨.
-            plan.stop_time = minutes;
+            plan.stop_time = (int)ceilf(seconds / 60.0f);
             break;
         }
     }

@@ -28,10 +28,16 @@ typedef struct {
     bool is_deco;   // 감압 모드 여부
 } DecoPlan;
 
+typedef struct {
+    int max_depth;   // 최대 깊이 (m)
+    int safe_stop_second; // 안전 정지 시간 (초)
+    int dive_time;  // 총 다이빙 시간 (초)
+} DiveStatus;
 
 void Init_Loadings(float current_loadings[]);
 void Update_N2_Loadings(float current_loadings[], float depth_meters, float fraction_o2, float interval_sec);
-float Calculate_NDL(float depth_meters, float current_loadings[], float GF_Hi, float PO2);
+void Update_N2_Loadings_Schreiner(float current_loadings[], float depth_meters, float prev_depth_meters, float fraction_o2, float interval_sec);
+float Calculate_NDL(float depth_meters, float current_loadings[], float GF_Hi, float fraction_o2);
 bool Is_Depth_Safe(float depth_to_check, float loadings[], float gf_low);
 DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_High, float PO2);
 int Calculate_TTS(float current_depth_m, float current_loadings[], float GF_Low, float GF_High, float fraction_o2);
