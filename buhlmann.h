@@ -41,5 +41,6 @@ float Calculate_NDL(float depth_meters, float current_loadings[], float GF_Hi, f
 bool Is_Depth_Safe(float depth_to_check, float loadings[], float gf_low);
 DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_High, float PO2);
 int Calculate_TTS(float current_depth_m, float current_loadings[], float GF_Low, float GF_High, float fraction_o2);
+float Calculate_Compartment_Ceiling(float Pi, int index, float gf);
 
 #endif // BUHLMANN_H

@@ -1,6 +1,7 @@
 ﻿
 #include "buhlmann.h"
 #include <math.h>
+#include <string.h>
 
 // ZHL-16C 질소 반감기 (단위: 분)
 float N2_Half_Lives[NUM_COMPARTMENTS] = {
@@ -45,7 +46,9 @@ void Init_Loadings(float current_loadings[]) {
  * @param interval_sec     지난번 계산 후 경과 시간 [초] (보통 1.0초)
  */
 void Update_N2_Loadings(float current_loadings[], float depth_meters, float fraction_o2, float interval_sec) {
-    
+#if 1
+    Update_N2_Loadings_Schreiner(current_loadings, depth_meters, depth_meters, fraction_o2, interval_sec);
+#else
     // 1. 현재 주변 압력 (Ambient Pressure) 계산 [bar]
     // 해수 기준: 10m 당 1bar 증가 + 수면 기압 1bar (정확히는 1.01325이나 편의상 1.0 사용)
     float P_amb = 1.0f + (depth_meters / 10.0f);
@@ -75,6 +78,7 @@ void Update_N2_Loadings(float current_loadings[], float depth_meters, float frac
         // 값 갱신
         current_loadings[i] = P_prev + (P_gas_n2 - P_prev) * decay_factor;
     }
+#endif
 }
 
 void Update_N2_Loadings_Schreiner(float current_loadings[], float depth_meters, float prev_depth_meters, float fraction_o2, float interval_sec) {
@@ -177,6 +181,32 @@ bool Is_Depth_Safe(float depth_to_check, float loadings[], float gf_low) {
 }
 
 /**
+ * @brief 특정 조직이 현재 질소량으로 올라갈 수 있는 최소 주변 압력을 계산
+ * 
+ * @param Pi       해당 조직의 현재 질소 압력 (bar)
+ * @param index    조직 번호 (0~15)
+ * @param gf       현재 적용할 Gradient Factor (0.0 ~ 1.0)
+ * @return float   허용 가능한 최소 주변 압력 (bar)
+ */
+float Calculate_Compartment_Ceiling(float Pi, int index, float gf) {
+    float a = A_Coefficients[index];
+    float b = B_Coefficients[index];
+
+    // 분모 계산: GF/b + 1 - GF
+    float denominator = (gf / b) + (1.0f - gf);
+    
+    // 분자 계산: Pi - a * GF
+    float numerator = Pi - (a * gf);
+
+    float p_amb_min = numerator / denominator;
+
+    // 만약 계산된 압력이 수면 압력(1.0)보다 낮다면, 수면 위로 올라가도 안전하다는 뜻
+    if (p_amb_min < 1.0f) return 1.0f;
+
+    return p_amb_min;
+}
+
+/**
  * @brief 감압 정보를 계산하는 메인 함수
  * 
  * @param current_loadings 현재 조직 질소 배열
@@ -185,6 +215,46 @@ bool Is_Depth_Safe(float depth_to_check, float loadings[], float gf_low) {
  * @return DecoPlan        정지 수심과 시간
  */
 DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_High, float PO2) {
+#if 0
+    DecoPlan plan = {0, 0, false};
+    float min_ceiling = 0.0f;
+
+    // 1. 현재 조직 상태에서 허용되는 절대 수심(Ceiling)을 계산
+    // P_amb_min = (Pi - a * GF) / (GF / b + 1 - GF)  <- Bühlmann 수식의 역산
+    for (int i = 0; i < NUM_COMPARTMENTS; i++) {
+        // 이 수식은 각 조직이 현재 허용하는 최소 주변 압력을 계산합니다.
+        // 여기서는 단순화를 위해 반복문으로 찾거나 수식을 정리해서 사용합니다.
+        float comp_ceiling = Calculate_Compartment_Ceiling(current_loadings[i], i, GF_Low); 
+        if (comp_ceiling > min_ceiling) min_ceiling = comp_ceiling;
+    }
+
+    if (min_ceiling <= 0.0f) {
+        plan.is_deco = false;
+        return plan;
+    }
+
+    plan.is_deco = true;
+    // 2. 3m 단위로 올림하여 stop_depth 결정 (예: 1.1m -> 3m, 3.2m -> 6m)
+    plan.stop_depth = (int)(ceilf(min_ceiling / 3.0f) * 3.0f);
+
+    // 3. 시간 계산 시뮬레이션 (초 단위를 더 세밀하게)
+    float sim_loadings[16];
+    memcpy(sim_loadings, current_loadings, sizeof(sim_loadings));
+    
+    int seconds = 0;
+    while (seconds < 3600) {
+        seconds += 10; // 10초 단위로 시뮬레이션
+        Update_N2_Loadings(sim_loadings, (float)plan.stop_depth, PO2, 10.0f);
+        
+        // 다음 단계(stop_depth - 3m)로 올라가도 되는지 체크
+        if (Is_Depth_Safe((float)(plan.stop_depth - 3), sim_loadings, GF_High)) {
+            break;
+        }
+    }
+    plan.stop_time = (int)ceilf(seconds / 60.0f);
+
+    return plan;
+#else
     DecoPlan plan = {0, 0, false};
     
     // 임시 로딩 배열 (시뮬레이션 용)
@@ -204,7 +274,7 @@ DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_Hi
     // 3m 부터 시작해서 3, 6, 9... 순으로 내려가며 안전한지 확인
     // 주의: 첫 정지 수심을 찾는 것이므로 GF_Low를 기준으로 함 (보수적 접근)
     int depth = 3;
-    while (depth < 100) { // 최대 100m 제한 (무한루프 방지)
+    while (depth < 300) { // 최대 300m 제한 (무한루프 방지)
         if (Is_Depth_Safe((float)depth, sim_loadings, GF_Low)) {
             // 이 수심은 안전함! -> 여기가 바로 정지 수심
             plan.stop_depth = depth;
@@ -255,6 +325,7 @@ DecoPlan Calculate_Deco_Stop(float current_loadings[], float GF_Low, float GF_Hi
     }
 
     return plan;
+#endif
 }
 
 /**
