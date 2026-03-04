@@ -38,10 +38,12 @@ int main() {
     float GF_Hi = 0.8f;
     float GF_Lo = 0.2f;
     float PO2 = 0.21f;
+    float PO2_Deep = 0.0f;
     float NDL = 0.0f;
     int TTS = 0;
     int EAN = 21; // Air 21% O2
     PO2 = EAN / 100.0f;
+    PO2_Deep = PO2;
 
     DecoPlan deco = {0, 0, false};
     DiveStatus status = {0, 0};
@@ -90,6 +92,8 @@ int main() {
                 }
             }
 
+            PO2_Deep = PO2 * (1.0f + (current_depth / 10.0f)); // 수심에 따른 PO2 계산
+
             // 다이빙 종료 조건
             // 수심이 1.2m 이하로 내려가면 다이빙 종료 (수면 도착)
             if (current_depth <= 1.2f && 60 < status.dive_time) {
@@ -137,7 +141,7 @@ int main() {
             NDL = Calculate_NDL(current_depth, current_loadings, GF_Hi, PO2);
             deco = Calculate_Deco_Stop(current_loadings, GF_Lo, GF_Hi, PO2);
             TTS = Calculate_TTS(current_depth, current_loadings, GF_Lo, GF_Hi, PO2);
-            showCurrentStatus(current_loadings, NDL, current_depth, TTS, deco, status, PO2, EAN);
+            showCurrentStatus(current_loadings, NDL, current_depth, TTS, deco, status, PO2_Deep, EAN);
 
             prev_depth = current_depth;
             prevTime = currentTime;
